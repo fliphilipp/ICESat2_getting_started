@@ -18,7 +18,7 @@ from utils.utilities import get_size
 #########################################################################################
 def download_is2(short_name='ATL03', start_date='2018-01-01', end_date='2030-01-01', uid='userid', pwd='pwd', 
                  bbox=None, shape=None, vars_sub='all', output_dir='nsidc_outputs', email='blah@ucsd.edu', 
-                 bbox_subset=None, shape_subset=None):
+                 bbox_subset=None, shape_subset=None, version=None):
     """
     Download ICESat-2 data from NSIDC. 
 
@@ -109,7 +109,10 @@ def download_is2(short_name='ATL03', start_date='2018-01-01', end_date='2030-01-
 
     # Find all instances of 'version_id' in metadata and print most recent version number
     versions = [el['version_id'] for el in results['feed']['entry']]
-    latest_version = max(versions)
+    if version is None:
+        latest_version = max(versions)
+    else: 
+        latest_version = '%03i' % version
     capability_url = f'https://n5eil02u.ecs.nsidc.org/egi/capabilities/{short_name}.{latest_version}.xml'
 
     search_params = {'short_name': short_name, 'version': latest_version, 'temporal': temporal, 'page_size': 100, 'page_num': 1}
