@@ -18,7 +18,7 @@ from utils.utilities import get_size
 #########################################################################################
 def download_is2(short_name='ATL03', start_date='2018-01-01', end_date='2030-01-01', uid='userid', pwd='pwd', 
                  bbox=None, shape=None, vars_sub='all', output_dir='nsidc_outputs', email='blah@ucsd.edu', 
-                 bbox_subset=None, shape_subset=None, version=None):
+                 bbox_subset=None, shape_subset=None, version=None, track=None):
     """
     Download ICESat-2 data from NSIDC. 
 
@@ -806,3 +806,276 @@ def print_granule_stats_atl03(photon_data, bckgrd_data, ancillary, outfile=None)
         with open(outfile, 'r') as f:
             print(f.read())
     return
+
+################################################################################
+def read_atl03(filename, geoid_h=True, gtxs_to_read='all'):
+    """
+    Read in an ATL03 granule. 
+
+    Parameters
+    ----------
+    filename : string
+        the file path of the granule to be read in
+    geoid_h : boolean
+        whether to include the ATL03-supplied geoid correction for photon heights
+
+    Returns
+    -------
+    dfs : dict of pandas dataframes
+          photon-rate data with keys ['gt1l', 'gt1r', 'gt2l', 'gt2r', 'gt3l', 'gt3r']
+          each dataframe contains the following variables
+          lat : float64, latitude of the photon, degrees
+          lon : float64, longitude of the photon, degrees
+          h : float64, elevation of the photon (geoid correction applied if geoid_h=True), meters
+          dt : float64, delta time of the photon, seconds from the ATLAS SDP GPS Epoch
+          mframe : uint32, the ICESat-2 major frame that the photon belongs to
+          qual : int8, quality flag 0=nominal,1=possible_afterpulse,2=possible_impulse_response_effect,3=possible_tep
+          xatc : float64, along-track distance of the photon, meters
+          geoid : float64, geoid correction that was applied to photon elevation (supplied if geoid_h=True), meters
+    dfs_bckgrd : dict of pandas dataframes
+                 photon-rate data with keys ['gt1l', 'gt1r', 'gt2l', 'gt2r', 'gt3l', 'gt3r']
+                 each dataframe contains the following variables
+                 pce_mframe_cnt : int64, the major frame that the data belongs to
+                 bckgrd_counts : int32, number of background photons
+                 bckgrd_int_height : float32, height of the background window, meters
+                 delta_time : float64, Time at the start of ATLAS 50-shot sum, seconds from the ATLAS SDP GPS Epoch
+    ancillary : dictionary with the following keys:
+                granule_id : string, the producer granule id, extracted from filename
+                atlas_sdp_gps_epoch : float64, reference GPS time for ATLAS in seconds [1198800018.0]
+                rgt : int16, the reference ground track number
+                cycle_number : int8, the ICESat-2 cycle number of the granule
+                sc_orient : the spacecraft orientation (usually 'forward' or 'backward')
+                gtx_beam_dict : dictionary of the ground track / beam number configuration 
+                                example: {'gt1l': 6, 'gt1r': 5, 'gt2l': 4, 'gt2r': 3, 'gt3l': 2, 'gt3r': 1}
+                gtx_strength_dict': dictionary of the ground track / beam strength configuration
+                                    example: {'gt1l': 'weak','gt1r': 'strong','gt2l': 'weak', ... }
+                                    
+    Examples
+    --------
+    >>> read_atl03(filename='processed_ATL03_20210715182907_03381203_005_01.h5', geoid_h=True)
+    """
+    
+    print('  reading in', filename)
+    granule_id = filename[filename.find('ATL03_'):(filename.find('.h5')+3)]
+    
+    # open file
+    f = h5py.File(filename, 'r')
+    
+    # make dictionaries for beam data to be stored in
+    dfs = {}
+    dfs_bckgrd = {}
+    all_beams = ['gt1l', 'gt1r', 'gt2l', 'gt2r', 'gt3l', 'gt3r']
+    beams_available = [beam for beam in all_beams if "/%s/heights/" % beam in f]
+    
+    if gtxs_to_read=='all':
+        beamlist = beams_available
+    elif gtxs_to_read=='none':
+        beamlist = []
+    else:
+        if type(gtxs_to_read)==list: beamlist = list(set(gtxs_to_read).intersection(set(beams_available)))
+        elif type(gtxs_to_read)==str: beamlist = list(set([gtxs_to_read]).intersection(set(beams_available)))
+        else: beamlist = beams_available
+    
+    conf_landice = 3 # index for the land ice confidence
+    
+    orient = f['orbit_info']['sc_orient'][0]
+    def orient_string(sc_orient):
+        if sc_orient == 0:
+            return 'backward'
+        elif sc_orient == 1:
+            return 'forward'
+        elif sc_orient == 2:
+            return 'transition'
+        else:
+            return 'error'
+        
+    orient_str = orient_string(orient)
+    gtl = ['gt1l', 'gt1r', 'gt2l', 'gt2r', 'gt3l', 'gt3r']
+    beam_strength_dict = {k:['weak','strong'][k%2] for k in np.arange(1,7,1)}
+    if orient_str == 'forward':
+        bl = np.arange(6,0,-1)
+        gtx_beam_dict = {k:v for (k,v) in zip(gtl,bl)}
+        gtx_strength_dict = {k:beam_strength_dict[gtx_beam_dict[k]] for k in gtl}
+    elif orient_str == 'backward':
+        bl = np.arange(1,7,1)
+        gtx_beam_dict = {k:v for (k,v) in zip(gtl,bl)}
+        gtx_strength_dict = {k:beam_strength_dict[gtx_beam_dict[k]] for k in gtl}
+    else:
+        gtx_beam_dict = {k:'undefined' for k in gtl}
+        gtx_strength_dict = {k:'undefined' for k in gtl}
+        
+
+    ancillary = {'granule_id': granule_id,
+                 'atlas_sdp_gps_epoch': f['ancillary_data']['atlas_sdp_gps_epoch'][0],
+                 'rgt': f['orbit_info']['rgt'][0],
+                 'cycle_number': f['orbit_info']['cycle_number'][0],
+                 'sc_orient': orient_str,
+                 'gtx_beam_dict': gtx_beam_dict,
+                 'gtx_strength_dict': gtx_strength_dict,
+                 'gtx_dead_time_dict': {}}
+
+    # loop through all beams
+    print('  reading in beam:', end=' ')
+    for beam in beamlist:
+        
+        print(beam, end=' ')
+        try:
+            
+            if gtx_strength_dict[beam]=='strong':
+                ancillary['gtx_dead_time_dict'][beam] = np.mean(np.array(f['ancillary_data']['calibrations']['dead_time'][beam]['dead_time'])[:16])
+            else:
+                ancillary['gtx_dead_time_dict'][beam] = np.mean(np.array(f['ancillary_data']['calibrations']['dead_time'][beam]['dead_time'])[16:])
+               
+            #### get photon-level data
+            # if "/%s/heights/" not in f: break; # 
+             
+            df = pd.DataFrame({'lat': np.array(f[beam]['heights']['lat_ph']),
+                               'lon': np.array(f[beam]['heights']['lon_ph']),
+                               'h': np.array(f[beam]['heights']['h_ph']),
+                               'dt': np.array(f[beam]['heights']['delta_time']),
+                               # 'conf': np.array(f[beam]['heights']['signal_conf_ph'][:,conf_landice]),
+                               # not using ATL03 confidences here
+                               'mframe': np.array(f[beam]['heights']['pce_mframe_cnt']),
+                               'ph_id_pulse': np.array(f[beam]['heights']['ph_id_pulse']),
+                               'qual': np.array(f[beam]['heights']['quality_ph'])}) 
+                               # 0=nominal,1=afterpulse,2=impulse_response_effect,3=tep
+            if 'weight_ph' in f[beam]['heights'].keys():
+                df['weight_ph'] = np.array(f[beam]['heights']['weight_ph'])
+# 
+#             df_bckgrd = pd.DataFrame({'pce_mframe_cnt': np.array(f[beam]['bckgrd_atlas']['pce_mframe_cnt']),
+#                                       'bckgrd_counts': np.array(f[beam]['bckgrd_atlas']['bckgrd_counts']),
+#                                       'bckgrd_int_height': np.array(f[beam]['bckgrd_atlas']['bckgrd_int_height']),
+#                                       'delta_time': np.array(f[beam]['bckgrd_atlas']['delta_time'])})
+
+            #### calculate along-track distances [meters from the equator crossing] from segment-level data
+            df['xatc'] = np.full_like(df.lat, fill_value=np.nan)
+            ph_index_beg = np.int64(f[beam]['geolocation']['ph_index_beg']) - 1
+            segment_dist_x = np.array(f[beam]['geolocation']['segment_dist_x'])
+            segment_length = np.array(f[beam]['geolocation']['segment_length'])
+            valid = ph_index_beg>=0 # need to delete values where there's no photons in the segment (-1 value)
+            df.loc[ph_index_beg[valid], 'xatc'] = segment_dist_x[valid]
+            df.xatc.fillna(method='ffill',inplace=True)
+            df.xatc += np.array(f[beam]['heights']['dist_ph_along'])
+
+            #### now we can filter out TEP (we don't do IRF / afterpulses because it seems to not be very good...)
+            df.query('qual < 3',inplace=True) 
+            # df.drop(columns=['qual'], inplace=True)
+
+            #### sort by along-track distance (for interpolation to work smoothly)
+            df.sort_values(by='xatc',inplace=True)
+            df.reset_index(inplace=True, drop=True)
+
+            if geoid_h:
+                #### interpolate geoid to photon level using along-track distance, and add to elevation
+                geophys_geoid = np.array(f[beam]['geophys_corr']['geoid'])
+                geophys_geoid_x = segment_dist_x+0.5*segment_length
+                valid_geoid = geophys_geoid<1e10 # filter out INVALID_R4B fill values
+                geophys_geoid = geophys_geoid[valid_geoid]
+                geophys_geoid_x = geophys_geoid_x[valid_geoid]
+                # hacky fix for no weird stuff happening if geoid is undefined everywhere
+                if len(geophys_geoid>5):
+                    geoid = np.interp(np.array(df.xatc), geophys_geoid_x, geophys_geoid)
+                    df['h'] = df.h - geoid
+                    df['geoid'] = geoid
+                    del geoid
+                else:
+                    df['geoid'] = 0.0
+
+            #### save to list of dataframes
+            dfs[beam] = df
+            del df 
+            gc.collect()
+            #Mdfs_bckgrd[beam] = df_bckgrd
+        
+        except:
+            print('Error for {f:s} on {b:s} ... skipping:'.format(f=filename, b=beam))
+            traceback.print_exc()
+            
+    f.close()
+    print(' --> done.')
+    if len(beamlist)==0:
+        return beams_available, ancillary
+    else:
+        return beams_available, ancillary, dfs
+    
+def read_atl06(filename, gtxs_to_read='all'):
+    # make dictionaries for beam data to be stored in
+    granule_id = filename[filename.find('ATL06_'):(filename.find('.h5')+3)]
+    print('  reading in', granule_id)
+
+    # open file
+    f = h5py.File(filename, 'r')
+    dfs = {}
+
+    all_beams = ['gt1l', 'gt1r', 'gt2l', 'gt2r', 'gt3l', 'gt3r']
+    beams_available = [beam for beam in all_beams if "/%s/land_ice_segments/" % beam in f]
+
+    if gtxs_to_read=='all':
+        beamlist = beams_available
+    elif gtxs_to_read=='none':
+        beamlist = []
+    else:
+        if type(gtxs_to_read)==list: beamlist = list(set(gtxs_to_read).intersection(set(beams_available)))
+        elif type(gtxs_to_read)==str: beamlist = list(set([gtxs_to_read]).intersection(set(beams_available)))
+        else: beamlist = beams_available
+
+    orient = f['orbit_info']['sc_orient'][0]
+    def orient_string(sc_orient):
+        if sc_orient == 0:
+            return 'backward'
+        elif sc_orient == 1:
+            return 'forward'
+        elif sc_orient == 2:
+            return 'transition'
+        else:
+            return 'error'
+
+    orient_str = orient_string(orient)
+    gtl = ['gt1l', 'gt1r', 'gt2l', 'gt2r', 'gt3l', 'gt3r']
+    beam_strength_dict = {k:['weak','strong'][k%2] for k in np.arange(1,7,1)}
+    if orient_str == 'forward':
+        bl = np.arange(6,0,-1)
+        gtx_beam_dict = {k:v for (k,v) in zip(gtl,bl)}
+        gtx_strength_dict = {k:beam_strength_dict[gtx_beam_dict[k]] for k in gtl}
+    elif orient_str == 'backward':
+        bl = np.arange(1,7,1)
+        gtx_beam_dict = {k:v for (k,v) in zip(gtl,bl)}
+        gtx_strength_dict = {k:beam_strength_dict[gtx_beam_dict[k]] for k in gtl}
+    else:
+        gtx_beam_dict = {k:'undefined' for k in gtl}
+        gtx_strength_dict = {k:'undefined' for k in gtl}
+
+    ancillary = {'granule_id': granule_id,
+                 'date': '%s-%s-%s' % (granule_id[8:12], granule_id[12:14], granule_id[14:16]),
+                 'atlas_sdp_gps_epoch': f['ancillary_data']['atlas_sdp_gps_epoch'][0],
+                 'rgt': f['orbit_info']['rgt'][0],
+                 'cycle_number': f['orbit_info']['cycle_number'][0],
+                 'sc_orient': orient_str,
+                 'gtx_beam_dict': gtx_beam_dict,
+                 'gtx_strength_dict': gtx_strength_dict
+                }
+
+    # loop through all beams
+    print('  reading in beam:', end=' ')
+    for beam in beamlist:
+
+        print(beam, end=' ')
+        try:
+            df = pd.DataFrame({'lat': np.array(f[beam]['land_ice_segments']['latitude']),
+                               'lon': np.array(f[beam]['land_ice_segments']['longitude']),
+                               'h': np.array(f[beam]['land_ice_segments']['h_li']),
+                               })
+
+            #### save to list of dataframes
+            dfs[beam] = df
+
+        except:
+            print('Error for {f:s} on {b:s} ... skipping:'.format(f=filename, b=beam))
+            traceback.print_exc()
+
+    f.close()
+    print(' --> done.')
+    if len(dfs)==0:
+        return ancillary
+    else:
+        return ancillary, dfs

@@ -8,3 +8,4 @@ This imports the modules.
 import utils.utilities
 import utils.nsidc
 import utils.readers
+import utils.S2

@@ -349,6 +349,8 @@ def read_atl06(filename, gtxs_to_read='all', verbose=False):
                                    'lat': np.array(f[beam]['land_ice_segments']['latitude']),
                                    'lon': np.array(f[beam]['land_ice_segments']['longitude']),
                                    'xatc': np.array(f[beam]['land_ice_segments']['ground_track']['x_atc']),
+                                   'yatc': np.array(f[beam]['land_ice_segments']['ground_track']['y_atc']),
+                                   'dh_fit_dy': np.array(f[beam]['land_ice_segments']['fit_statistics']['dh_fit_dy']),
                                    'h': np.array(f[beam]['land_ice_segments']['h_li']),
                                    'geoid_h': np.array(f[beam]['land_ice_segments']['dem']['geoid_h']),
                                    'qual_summary': np.array(f[beam]['land_ice_segments']['atl06_quality_summary']),
