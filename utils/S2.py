@@ -269,14 +269,18 @@ def plotS2cloudfree(lon, lat, date_time, buffer_m=2500, max_cloud_prob=15, gamma
 
 #####################################################################
 def convert_time_to_string(lake_mean_delta_time):
-    # ATLAS SDP epoch is 2018-01-01:T00.00.00.000000 UTC, from ATL03 data dictionary 
-    ATLAS_SDP_epoch_datetime = datetime(2018, 1, 1, tzinfo=timezone.utc)
-    ATLAS_SDP_epoch_timestamp = datetime.timestamp(ATLAS_SDP_epoch_datetime)
-    lake_mean_timestamp = ATLAS_SDP_epoch_timestamp + lake_mean_delta_time
-    lake_mean_datetime = datetime.fromtimestamp(lake_mean_timestamp, tz=timezone.utc)
-    time_format_out = '%Y-%m-%dT%H:%M:%SZ'
-    is2time = datetime.strftime(lake_mean_datetime, time_format_out)
-    return is2time
+    # handle nans
+    if np.isnan(lake_mean_delta_time) | (lake_mean_delta_time == np.inf):
+        return np.nan
+    else:
+        # ATLAS SDP epoch is 2018-01-01:T00.00.00.000000 UTC, from ATL03 data dictionary
+        ATLAS_SDP_epoch_datetime = datetime(2018, 1, 1, tzinfo=timezone.utc)
+        ATLAS_SDP_epoch_timestamp = datetime.timestamp(ATLAS_SDP_epoch_datetime)
+        lake_mean_timestamp = ATLAS_SDP_epoch_timestamp + lake_mean_delta_time
+        lake_mean_datetime = datetime.fromtimestamp(lake_mean_timestamp, tz=timezone.utc)
+        time_format_out = '%Y-%m-%dT%H:%M:%SZ'
+        is2time = datetime.strftime(lake_mean_datetime, time_format_out)
+        return is2time
 
 
 # function to add map inset
